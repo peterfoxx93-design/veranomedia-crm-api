@@ -1,0 +1,19 @@
+{
+  "clinica": {
+    "nombre": "Verano Media",
+    "eslogan": "Marketing Digital para Clínicas e Inmobiliarias",
+    "direccion": "Santo Domingo, República Dominicana",
+    "telefono": "+1 (809) 555-0100",
+    "email": "info@veranomediaweb.com",
+    "sitio_web": "veranomediaweb.com",
+    "logo_texto": "VM",
+    "color_primario": "#2563eb",
+    "color_secundario": "#1e3a5f"
+  },
+  "reporte": {
+    "default_periodo_dias": 30,
+    "incluir_graficos_por_defecto": true,
+    "mostrar_solo_leads": false,
+    "encabezado_personalizado": "Reporte de Gestión Comercial"
+  }
+}

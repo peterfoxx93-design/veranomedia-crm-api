@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VM CRM — Verano Media</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        vm: { 50: '#eff6ff', 100: '#dbeafe', 500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8', 900: '#1e3a5f' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        * { font-family: 'Inter', sans-serif; }
+        body { background: #f0f4f8; }
+        .card { background: white; border-radius: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); transition: all 0.2s; }
+        .clickable-card { cursor: pointer; background: white; border-radius: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); display: block; text-decoration: none; color: inherit; }
+        .clickable-card:hover { transform: translateY(-4px) scale(1.02); box-shadow: 0 12px 24px rgba(0,0,0,0.12); }
+        .clickable-card:active { transform: scale(0.97); }
+        .btn { transition: all 0.15s; }
+        .btn:active { transform: scale(0.97); }
+        .fade-in { animation: fadeIn 0.3s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        .sidebar-link { border-radius: 10px; padding: 10px 14px; transition: all 0.15s; font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 12px; text-decoration: none; color: #374151; }
+        .sidebar-link:hover { background: #e8f0fe; }
+        .sidebar-link.active { background: #2563eb; color: white; }
+        .status-badge { padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    </style>
+</head>
+<body class="min-h-screen flex" id="app">
+    <!-- SIDEBAR -->
+    <aside class="w-64 bg-white border-r border-gray-200 flex flex-col shrink-0">
+        <div class="p-5 border-b border-gray-100">
+            <div class="flex items-center gap-3">
+                <img src="/static/logo_vm.png" style="height:40px;width:40px;border-radius:10px;object-fit:contain" alt="VM">
+                <div>
+                    <div class="font-bold text-gray-900 text-lg leading-tight">Verano Media</div>
+                    <div class="text-xs text-gray-500">CRM</div>
+                </div>
+            </div>
+        </div>
+        <nav class="flex-1 p-3 space-y-1" id="sidebar-nav">
+            <a href="/" class="sidebar-link"><span>📊</span> Dashboard</a>
+            <a href="/pipeline" class="sidebar-link"><span>📋</span> Pipeline</a>
+            <a href="/leads" class="sidebar-link"><span>👥</span> Leads</a>
+            <a href="/calendar" class="sidebar-link"><span>📅</span> Calendario</a>
+            <a href="/reports" class="sidebar-link"><span>📈</span> Reportes</a>
+        </nav>
+        <div class="p-4 border-t border-gray-100">
+            <a href="/logout" class="sidebar-link text-gray-500"><span>🚪</span> Cerrar sesión</a>
+        </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="flex-1 p-6 overflow-y-auto" id="main-content">
+        <div class="flex items-center justify-center h-64 text-gray-400">
+            <div>Cargando...</div>
+        </div>
+    </main>
+
+    <script>
+    // ============================================================
+    // STATE
+    // ============================================================
+    let STATE = { stats: null, leads: [], currentLead: null, appointments: [] };
+
+    const STATUS = {
+        frio: { label: 'Frio', emoji: '\u2744\ufe0f', color: '#6b7280', bg: '#f3f4f6' },
+        tibio: { label: 'Tibio', emoji: '\uD83D\uDD25', color: '#d97706', bg: '#fef3c7' },
+        caliente: { label: 'Caliente', emoji: '\uD83D\uDCA5', color: '#dc2626', bg: '#fee2e2' },
+        cerrado: { label: 'Cerrado', emoji: '\u2705', color: '#059669', bg: '#d1fae5' },
+    };
+    const STATUS_KEYS = Object.keys(STATUS);
+
+    function fmtDate(iso) {
+        if (!iso) return '\u2014';
+        return new Date(iso).toLocaleDateString('es-DO', { day: 'numeric', month: 'short' });
+    }
+    function fmtDateTime(iso) {
+        if (!iso) return '\u2014';
+        const d = new Date(iso);
+        return d.toLocaleDateString('es-DO', { day: 'numeric', month: 'short' }) + ' ' +
+               d.toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' });
+    }
+    function sBadge(status) {
+        const c = STATUS[status] || STATUS.frio;
+        return '<span class="status-badge" style="background:' + c.bg + ';color:' + c.color + '">' + c.emoji + ' ' + c.label + '</span>';
+    }
+
+    // ============================================================
+    // API
+    // ============================================================
+    async function api(url, opts) {
+        var res = await fetch(url, {
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            ...(opts || {})
+        });
+        if (res.status === 401) { window.location = '/login'; return null; }
+        if (!res.ok) { var err = await res.json().catch(function() { return {}; }); throw new Error(err.error || res.statusText); }
+        return res.json();
+    }
+
+    // ============================================================
+    // NAVIGATION
+    // ============================================================
+    function setActiveLink(path) {
+        var links = document.querySelectorAll('#sidebar-nav a');
+        var i;
+        for (i = 0; i < links.length; i++) {
+            var href = links[i].getAttribute('href');
+            if (path === '/' && href === '/') links[i].classList.add('active');
+            else if (path.startsWith(href) && href !== '/') links[i].classList.add('active');
+            else links[i].classList.remove('active');
+        }
+    }
+
+    function navigateTo(url) {
+        history.pushState(null, '', url);
+        setActiveLink(url.split('?')[0]);
+        renderPage();
+    }
+
+    // ============================================================
+    // RENDER
+    // ============================================================
+    async function renderPage() {
+        var main = document.getElementById('main-content');
+        var path = window.location.pathname;
+        var search = window.location.search;
+
+        try {
+            if (path === '/') {
+                var stats = await api('/api/stats');
+                var leadsData = await api('/api/leads');
+                main.innerHTML = renderDashboard(stats, (leadsData && leadsData.leads) ? leadsData.leads.slice(0, 5) : []);
+            } else if (path === '/pipeline') {
+                var data = await api('/api/leads');
+                main.innerHTML = renderPipeline(data ? data.leads : []);
+            } else if (path === '/leads') {
+                var apiUrl = '/api/leads' + search;
+                var statusFilter = search.indexOf('status=') >= 0 ? search.replace('?status=', '') : null;
+                var data = await api(apiUrl);
+                main.innerHTML = renderLeads(data ? data.leads : [], statusFilter);
+            } else if (path.indexOf('/lead/') === 0) {
+                var id = path.split('/')[2];
+                var lead = await api('/api/leads/' + id);
+                main.innerHTML = renderLeadDetail(lead);
+            } else if (path === '/calendar') {
+                var data = await api('/api/appointments');
+                main.innerHTML = renderCalendar(data ? data.appointments : []);
+            } else if (path === '/reports') {
+                var stats = await api('/api/stats');
+                var leadsData = await api('/api/leads');
+                main.innerHTML = renderReports(stats, leadsData ? leadsData.leads : []);
+            } else {
+                main.innerHTML = '<div class="text-center py-16 text-gray-400">Pagina no encontrada</div>';
+            }
+        } catch (e) {
+            main.innerHTML = '<div class="text-red-500 p-8 text-center text-lg">Error: ' + e.message + '</div>';
+        }
+    }
+
+    // ============================================================
+    // DASHBOARD
+    // ============================================================
+    function renderDashboard(s, recent) {
+        var bs = s.by_status || {};
+        var html = '';
+        html += '<div class="fade-in">';
+        html += '<div class="flex justify-between items-center mb-6">';
+        html += '<div class="flex items-center gap-4">';
+        html += '<h2 class="text-2xl font-bold text-gray-900">Dashboard</h2>';
+        html += '<span class="text-sm text-gray-500">' + new Date().toLocaleDateString('es-DO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + '</span>';
+        html += '</div>';
+        html += '<button onclick="showNewLeadForm()" class="btn bg-vm-600 text-white px-4 py-2 rounded-xl font-medium hover:bg-vm-700 whitespace-nowrap">+ Nuevo Prospecto</button>';
+        html += '</div>';
+
+        // Stats row
+        html += '<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">';
+        html += statCard('Total Leads', s.total_leads, '\uD83D\uDC65', 'bg-blue-50 text-blue-600', '/leads');
+        html += statCard('Hoy', s.today_leads, '\uD83D\uDCE5', 'bg-green-50 text-green-600', '/leads?days=1');
+        html += statCard('Citas Hoy', s.today_appointments, '\uD83D\uDCC5', 'bg-purple-50 text-purple-600', '/calendar');
+        html += statCard('Proximas', s.upcoming_appointments, '\uD83D\uDD14', 'bg-orange-50 text-orange-600', '/calendar');
+        html += '</div>';
+
+        // Status row
+        html += '<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">';
+        html += statusCard('\u2744\ufe0f', 'Frios', bs.frio || 0, '#6b7280', '/leads?status=frio');
+        html += statusCard('\uD83D\uDD25', 'Tibios', bs.tibio || 0, '#d97706', '/leads?status=tibio');
+        html += statusCard('\uD83D\uDCA5', 'Calientes', bs.caliente || 0, '#dc2626', '/leads?status=caliente');
+        html += statusCard('\u2705', 'Cerrados', bs.cerrado || 0, '#059669', '/leads?status=cerrado');
+        html += '</div>';
+
+        // Recent leads
+        html += '<div class="card p-6">';
+        html += '<h3 class="font-semibold text-gray-700 mb-4">Ultimos leads</h3>';
+        html += '<div class="space-y-3">';
+        if (recent && recent.length > 0) {
+            for (var i = 0; i < recent.length; i++) {
+                var l = recent[i];
+                var initial = l.name ? l.name.charAt(0).toUpperCase() : '?';
+                var statusStyle = l.status === 'caliente' ? 'bg-red-100 text-red-600' :
+                                  l.status === 'tibio' ? 'bg-yellow-100 text-yellow-600' :
+                                  l.status === 'cerrado' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-500';
+                html += '<a href="/lead/' + l.id + '" class="flex items-center justify-between p-3 border border-gray-100 rounded-xl hover:bg-gray-50 no-underline" style="text-decoration:none;color:inherit">';
+                html += '<div class="flex items-center gap-3">';
+                html += '<div class="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold ' + statusStyle + '">' + initial + '</div>';
+                html += '<div><div class="font-medium text-gray-900 text-sm">' + escHtml(l.name) + '</div>';
+                if (l.business) html += '<div class="text-xs text-gray-500">' + escHtml(l.business) + '</div>';
+                if (l.location) html += '<div class="text-xs text-gray-400">📍 ' + escHtml(l.location) + '</div>';
+                html += '</div></div>';
+                html += '<div class="text-right"><div>' + sBadge(l.status) + '</div><div class="text-xs text-gray-400 mt-1">' + fmtDate(l.created_at) + '</div></div>';
+                html += '</a>';
+            }
+        } else {
+            html += '<p class="text-gray-400 text-center py-4">No hay leads aun</p>';
+        }
+        html += '</div></div>';
+        html += '</div>';
+        return html;
+    }
+
+    function escHtml(s) {
+        if (!s) return '';
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function statCard(label, value, emoji, colorClass, link) {
+        return '<a href="' + link + '" class="clickable-card flex items-center gap-4 p-4">' +
+            '<div class="w-12 h-12 rounded-xl ' + colorClass + ' flex items-center justify-center text-xl">' + emoji + '</div>' +
+            '<div><div class="text-2xl font-bold text-gray-900">' + (value || 0) + '</div><div class="text-xs text-gray-500">' + label + '</div></div>' +
+            '</a>';
+    }
+
+    function statusCard(emoji, label, count, color, link) {
+        return '<a href="' + link + '" class="clickable-card p-4 text-center">' +
+            '<div class="text-3xl mb-1">' + emoji + '</div>' +
+            '<div class="text-2xl font-bold" style="color:' + color + '">' + count + '</div>' +
+            '<div class="text-xs text-gray-500">' + label + '</div>' +
+            '</a>';
+    }
+
+    // ============================================================
+    // PIPELINE
+    // ============================================================
+    function renderPipeline(leads) {
+        var cols = { frio: [], tibio: [], caliente: [], cerrado: [] };
+        for (var i = 0; i < leads.length; i++) {
+            var s = leads[i].status;
+            if (cols[s]) cols[s].push(leads[i]);
+        }
+        var html = '<div class="fade-in">';
+        html += '<div class="flex justify-between items-center mb-6">';
+        html += '<h2 class="text-2xl font-bold text-gray-900">Pipeline</h2>';
+        html += '<button onclick="showNewLeadForm()" class="btn bg-vm-600 text-white px-4 py-2 rounded-xl font-medium hover:bg-vm-700 whitespace-nowrap">+ Nuevo Prospecto</button>';
+        html += '</div>';
+        html += '<div class="grid grid-cols-4 gap-4">';
+        html += kanbanCol('Frio', cols.frio, '#6b7280');
+        html += kanbanCol('Tibio', cols.tibio, '#d97706');
+        html += kanbanCol('Caliente', cols.caliente, '#dc2626');
+        html += kanbanCol('Cerrado', cols.cerrado, '#059669');
+        html += '</div></div>';
+        return html;
+    }
+
+    function kanbanCol(title, leads, color) {
+        var html = '<div>';
+        html += '<div class="flex items-center justify-between mb-3 px-1">';
+        html += '<h3 class="font-semibold" style="color:' + color + '">' + title + '</h3>';
+        html += '<span class="text-sm text-gray-400">' + leads.length + '</span>';
+        html += '</div><div class="space-y-2">';
+        for (var i = 0; i < leads.length; i++) {
+            var l = leads[i];
+            html += '<a href="/lead/' + l.id + '" class="card p-3 block no-underline" style="text-decoration:none;color:inherit">';
+            html += '<div class="font-medium text-gray-900 text-sm">' + escHtml(l.name) + '</div>';
+            if (l.business) html += '<div class="text-xs text-gray-500">' + escHtml(l.business) + '</div>';
+            if (l.location) html += '<div class="text-xs text-gray-400">📍 ' + escHtml(l.location) + '</div>';
+            html += '<div class="flex justify-between items-center mt-2">';
+            html += '<span class="text-xs text-gray-400">' + fmtDate(l.created_at) + '</span>';
+            if (l.score) html += '<span class="text-xs font-semibold" style="color:' + color + '">' + l.score + '/10</span>';
+            html += '</div></a>';
+        }
+        if (leads.length === 0) {
+            html += '<div class="text-center text-gray-300 text-sm py-8 border-2 border-dashed border-gray-200 rounded-xl">Sin leads</div>';
+        }
+        html += '</div></div>';
+        return html;
+    }
+
+    // ============================================================
+    // LEADS LIST
+    // ============================================================
+    function renderLeads(leads, filter) {
+        var title = filter ? 'Leads - ' + (STATUS[filter] || {}).emoji + ' ' + (STATUS[filter] || {}).label : 'Leads';
+        var html = '<div class="fade-in">';
+        html += '<div class="flex justify-between items-center mb-6">';
+        html += '<h2 class="text-2xl font-bold text-gray-900">' + title + '</h2>';
+        html += '<button onclick="showNewLeadForm()" class="btn bg-vm-600 text-white px-4 py-2 rounded-xl font-medium hover:bg-vm-700 whitespace-nowrap">+ Nuevo Prospecto</button>';
+        html += '</div>';
+        html += '<div class="card overflow-hidden"><table class="w-full text-sm">';
+        html += '<thead><tr class="bg-gray-50 text-left text-gray-500 text-xs uppercase tracking-wider">';
+        html += '<th class="p-4">Nombre / Ubicación</th><th class="p-4">Negocio</th><th class="p-4">Contacto</th><th class="p-4">Estado</th><th class="p-4">Score</th><th class="p-4">Creado</th><th class="p-4"></th>';
+        html += '</tr></thead><tbody class="divide-y divide-gray-100">';
+        for (var i = 0; i < leads.length; i++) {
+            var l = leads[i];
+            html += '<tr class="hover:bg-gray-50">';
+            html += '<td class="p-4 font-medium text-gray-900">' + escHtml(l.name);
+            if (l.location) html += '<div class="text-xs text-gray-400 font-normal mt-0.5">📍 ' + escHtml(l.location) + '</div>';
+            html += '</td>';
+            html += '<td class="p-4 text-gray-600">' + escHtml(l.business || '-') + '</td>';
+            html += '<td class="p-4 text-gray-600 text-xs">' + escHtml(l.phone || '') + '</td>';
+            html += '<td class="p-4">' + sBadge(l.status) + '</td>';
+            html += '<td class="p-4"><span class="font-semibold">' + (l.score || 0) + '</span><span class="text-gray-400">/10</span></td>';
+            html += '<td class="p-4 text-gray-500 text-xs">' + fmtDate(l.created_at) + '</td>';
+            html += '<td class="p-4 text-right">' +
+                '<button onclick="event.stopPropagation();deleteLeadConfirm(' + l.id + ')" class="text-gray-400 hover:text-red-600 transition text-xs font-medium" title="Eliminar lead">🗑️ Eliminar</button>' +
+                '</td>';
+            html += '</tr>';
+        }
+        if (leads.length === 0) html += '<tr><td colspan="6" class="p-8 text-center text-gray-400">No hay leads</td></tr>';
+        html += '</tbody></table></div></div>';
+        return html;
+    }
+
+    // ============================================================
+    // LEAD DETAIL
+    // ============================================================
+    function renderLeadDetail(lead) {
+        if (!lead) return '<div class="p-8 text-center text-red-500">Lead no encontrado</div>';
+        var html = '<div class="fade-in max-w-4xl">';
+        html += '<div class="flex items-center gap-3 mb-6">';
+        html += '<a href="/leads" class="text-gray-400 hover:text-gray-600">← Volver</a>';
+        html += '<h2 class="text-2xl font-bold text-gray-900">' + escHtml(lead.name) + '</h2>';
+        html += sBadge(lead.status);
+        html += '<div class="flex-1"></div>';
+        html += '<button onclick="deleteLeadConfirm(' + lead.id + ')" class="text-sm text-red-400 hover:text-red-600 transition font-medium">🗑️ Eliminar</button>';
+        html += '</div>';
+
+        html += '<div class="grid grid-cols-3 gap-4 mb-6">';
+        html += detailCard('Negocio', escHtml(lead.business || '-'));
+        html += detailCard('Teléfono', escHtml(lead.phone || '-'));
+        html += detailCard('Email', escHtml(lead.email || '-'));
+        html += detailCard('📍 Ubicación', escHtml(lead.location || '-'));
+        html += detailCard('Presupuesto', escHtml(lead.budget || '-'));
+        html += detailCard('Score', (lead.score || 0) + '/10');
+        html += '</div>';
+
+        // Status changer
+        var opts = '';
+        for (var i = 0; i < STATUS_KEYS.length; i++) {
+            var s = STATUS_KEYS[i];
+            opts += '<option value="' + s + '"' + (lead.status === s ? ' selected' : '') + '>' + STATUS[s].emoji + ' ' + STATUS[s].label + '</option>';
+        }
+        html += '<div class="card p-4 mb-6">';
+        html += '<label class="text-xs text-gray-500 uppercase tracking-wider mb-2 block">Cambiar Estado</label>';
+        html += '<select class="border rounded-lg p-2 w-full" onchange="api(\'/api/leads/' + lead.id + '\',{method:\'PUT\',body:JSON.stringify({status:this.value})})">' + opts + '</select>';
+        html += '</div>';
+
+        html += '<div class="card p-4 mb-6">';
+        html += '<h3 class="font-semibold text-gray-700 mb-3">Historial</h3>';
+        html += '<div class="space-y-2">';
+        var interactions = lead.interactions || [];
+        for (var i = 0; i < interactions.length; i++) {
+            var ix = interactions[i];
+            html += '<div class="flex gap-2' + (ix.direction === 'in' ? '' : ' flex-row-reverse') + '">';
+            html += '<div class="' + (ix.direction === 'in' ? 'bg-gray-100' : 'bg-blue-50') + ' rounded-lg px-3 py-2 text-sm max-w-[80%]">';
+            html += '<span class="text-xs text-gray-400">' + fmtDateTime(ix.created_at) + '</span>';
+            html += '<p class="mt-0.5">' + escHtml(ix.message) + '</p></div></div>';
+        }
+        if (interactions.length === 0) html += '<p class="text-gray-400 text-sm">Sin interacciones</p>';
+        html += '</div></div>';
+
+        html += '</div>';
+        return html;
+    }
+
+    function detailCard(label, value) {
+        return '<div class="card p-4"><label class="text-xs text-gray-500 uppercase tracking-wider">' + label + '</label><p class="font-medium mt-1">' + value + '</p></div>';
+    }
+
+    // ============================================================
+    // CALENDAR
+    // ============================================================
+    function renderCalendar(appointments) {
+        var html = '<div class="fade-in">';
+        html += '<h2 class="text-2xl font-bold text-gray-900 mb-6">Calendario</h2>';
+        html += '<div class="card p-6">';
+        html += '<h3 class="font-semibold text-gray-700 mb-4">Proximas citas</h3>';
+        html += '<div class="space-y-3">';
+        for (var i = 0; i < appointments.length; i++) {
+            var a = appointments[i];
+            var d = new Date(a.datetime);
+            html += '<div class="flex items-center justify-between p-3 border rounded-lg">';
+            html += '<div class="flex items-center gap-3">';
+            html += '<div class="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center text-blue-600 font-bold">' + d.getDate() + '</div>';
+            html += '<div><div class="font-medium text-gray-900">' + escHtml(a.lead_name) + '</div>';
+            html += '<div class="text-sm text-gray-500">' + fmtDateTime(a.datetime) + ' · ' + a.duration_minutes + 'min</div></div></div>';
+            html += '<span class="text-sm text-gray-400 capitalize">' + a.status + '</span></div>';
+        }
+        if (appointments.length === 0) html += '<p class="text-gray-400 text-center py-8">No hay citas agendadas</p>';
+        html += '</div></div></div>';
+        return html;
+    }
+
+    // ============================================================
+    // REPORTS
+    // ============================================================
+    function renderReports(s, leads) {
+        return '<div class="fade-in">' +
+            '<div class="flex justify-between items-center mb-6">' +
+            '<h2 class="text-2xl font-bold text-gray-900">Reportes</h2>' +
+            '<button onclick="showReportPreview()" class="btn bg-vm-600 text-white px-4 py-2 rounded-xl font-medium hover:bg-vm-700">Generar Reporte</button>' +
+            '</div>' +
+            renderQuickStats(s, leads) +
+            '</div>';
+    }
+
+    function renderQuickStats(s, leads) {
+        var bs = s.by_status || {};
+        var total = s.total_leads || 0;
+        var html = '<div class="grid grid-cols-2 gap-4 mb-6">' +
+            '<div class="card p-4"><h3 class="font-semibold text-gray-700 mb-3">Leads por estado</h3><div class="space-y-3">';
+        var STATUS_KEYS = Object.keys(STATUS);
+        for (var i = 0; i < STATUS_KEYS.length; i++) {
+            var k = STATUS_KEYS[i];
+            var v = STATUS[k];
+            var count = bs[k] || 0;
+            var pct = Math.round((count / Math.max(total, 1)) * 100);
+            html += '<div class="flex items-center justify-between">' +
+                '<span>' + v.emoji + ' ' + v.label + '</span>' +
+                '<div class="flex items-center gap-2">' +
+                '<div class="w-32 h-2 bg-gray-100 rounded-full overflow-hidden">' +
+                '<div class="h-full rounded-full" style="width:' + pct + '%;background:' + v.color + '"></div></div>' +
+                '<span class="text-sm font-medium w-6 text-right">' + count + '</span></div></div>';
+        }
+        html += '</div></div>' +
+            '<div class="card p-4"><h3 class="font-semibold text-gray-700 mb-3">Resumen</h3>' +
+            '<div class="space-y-2 text-sm">' +
+            '<p>Total leads: <strong>' + s.total_leads + '</strong></p>' +
+            '<p>Esta semana: <strong>' + s.week_leads + '</strong></p>' +
+            '<p>Hoy: <strong>' + s.today_leads + '</strong></p>' +
+            '<p>Calientes: <strong>' + Math.round((bs.caliente / Math.max(total, 1)) * 100) + '%</strong></p>' +
+            '<p>Conversion: <strong>' + Math.round((bs.cerrado / Math.max(total, 1)) * 100) + '%</strong></p>' +
+            '</div></div></div>' +
+            '<div class="card p-4"><h3 class="font-semibold text-gray-700 mb-3">Ultimos leads</h3>';
+        html += '<div class="text-sm">';
+        for (var i = 0; i < Math.min(10, leads.length); i++) {
+            var l = leads[i];
+            html += '<div class="flex justify-between py-1 border-b">' +
+                '<span>' + escHtml(l.name) + '</span>' +
+                '<span>' + fmtDate(l.created_at) + '</span>' +
+                '<span>' + sBadge(l.status) + '</span></div>';
+        }
+        html += '</div></div>';
+        return html;
+    }
+
+    // ============================================================
+    // REPORT GENERATOR
+    // ============================================================
+    var REPORT_PERIODS = [
+        { label: 'Ultimos 7 dias', value: 7 },
+        { label: 'Ultimos 30 dias', value: 30 },
+        { label: 'Ultimos 90 dias', value: 90 },
+        { label: 'Todo', value: 0 },
+    ];
+
+    function showReportPreview() {
+        var main = document.getElementById('main-content');
+        var html = '<div class="fade-in max-w-4xl mx-auto">';
+        html += '<div class="flex justify-between items-center mb-6">';
+        html += '<h2 class="text-2xl font-bold text-gray-900">Generar Reporte</h2>';
+        html += '<button onclick="renderPage()" class="text-gray-400 hover:text-gray-600">Cerrar</button>';
+        html += '</div>';
+
+        // Controls
+        html += '<div class="card p-6 mb-6">';
+        html += '<div class="grid grid-cols-3 gap-4">';
+
+        // Period selector
+        html += '<div><label class="block text-xs text-gray-500 uppercase tracking-wider mb-2">Periodo</label>';
+        html += '<select id="r-period" class="border rounded-lg p-2 w-full text-sm" onchange="updateReportPreview()">';
+        for (var i = 0; i < REPORT_PERIODS.length; i++) {
+            var p = REPORT_PERIODS[i];
+            html += '<option value="' + p.value + '">' + p.label + '</option>';
+        }
+        html += '</select></div>';
+
+        // Content type
+        html += '<div><label class="block text-xs text-gray-500 uppercase tracking-wider mb-2">Contenido</label>';
+        html += '<select id="r-content" class="border rounded-lg p-2 w-full text-sm" onchange="updateReportPreview()">';
+        html += '<option value="completo">Completo (graficos + leads)</option>';
+        html += '<option value="solo_leads">Solo leads</option>';
+        html += '<option value="solo_graficos">Solo graficos</option>';
+        html += '</select></div>';
+
+        // Style
+        html += '<div><label class="block text-xs text-gray-500 uppercase tracking-wider mb-2">Exportar</label>';
+        html += '<div class="flex gap-2">';
+        html += '<button onclick="exportReport(\'pdf\')" class="flex-1 btn bg-red-50 text-red-600 p-2 rounded-lg text-sm font-medium hover:bg-red-100">PDF</button>';
+        html += '<button onclick="exportReport(\'csv\')" class="flex-1 btn bg-green-50 text-green-600 p-2 rounded-lg text-sm font-medium hover:bg-green-100">CSV</button>';
+        html += '<button onclick="exportReport(\'md\')" class="flex-1 btn bg-blue-50 text-blue-600 p-2 rounded-lg text-sm font-medium hover:bg-blue-100">MD</button>';
+        html += '</div></div>';
+
+        html += '</div></div>';
+
+        // Preview area
+        html += '<div id="report-preview" class="bg-white rounded-2xl shadow-lg p-8 border">';
+        html += '<div class="text-center text-gray-400 py-8">Cargando reporte...</div>';
+        html += '</div></div>';
+
+        main.innerHTML = html;
+        updateReportPreview();
+    }
+
+    function updateReportPreview() {
+        var days = parseInt(document.getElementById('r-period').value);
+        var content = document.getElementById('r-content').value;
+
+        api('/api/report?days=' + days + '&charts=true').then(function(data) {
+            if (!data) return;
+            renderReportPreview(data, content);
+        }).catch(function(e) {
+            document.getElementById('report-preview').innerHTML =
+                '<div class="text-red-500 text-center py-8">Error: ' + e.message + '</div>';
+        });
+    }
+
+    function renderReportPreview(data, contentMode) {
+        var cfg = data.config || {};
+        var clinica = cfg.clinica || {};
+        var res = data.resumen || {};
+        var leads = data.leads || [];
+        var appointments = data.appointments || [];
+        var daily = data.daily || { labels: [], values: [] };
+        var scoreDist = data.score_dist || {};
+
+        var html = '';
+
+        // === HEADER with logo ===
+        var logoStyle = 'height:44px;width:auto;border-radius:8px';
+        var logoSrc = window._logoSrc || '/static/logo_vm.png';
+        html += '<div style="border-bottom:3px solid ' + (clinica.color_primario || '#2563eb') + ';padding-bottom:16px;margin-bottom:24px">';
+        html += '<div style="display:flex;align-items:center;gap:16px;margin-bottom:4px">';
+        html += '<img src="' + logoSrc + '" style="' + logoStyle + '" alt="VM Logo" onerror="this.style.display=\'none\'">';
+        html += '<div><div style="font-size:20px;font-weight:700;color:#1f2937">' + escHtml(clinica.nombre || 'Verano Media RD') + '</div>';
+        html += '<div style="font-size:13px;color:#6b7280">' + escHtml(clinica.eslogan || '') + '</div></div></div>';
+        html += '<div style="display:flex;justify-content:space-between;font-size:13px;color:#9ca3af;margin-top:8px">';
+        html += '<span>📅 Generado: ' + fmtDateTime(data.generated_at) + '</span>';
+        html += '<span>📊 Periodo: ' + getPeriodLabel(data.periodo ? data.periodo.dias : 30) + '</span>';
+        html += '</div></div>';
+
+        if (contentMode === 'solo_leads') {
+            html += renderReportLeadsTable(leads, clinica);
+            html += renderReportFooter(clinica, data.generated_at);
+            document.getElementById('report-preview').innerHTML =
+                '<div class="text-xs text-gray-400 mb-4" style="text-align:center">Vista previa</div>' + html;
+            return;
+        }
+
+        // === EXECUTIVE SUMMARY ===
+        html += '<div style="margin-bottom:24px">';
+        html += '<h3 style="font-size:16px;font-weight:600;color:#1f2937;margin-bottom:12px">Resumen Ejecutivo</h3>';
+        html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">';
+        html += summaryBox('Total Leads', res.total || 0, '#3b82f6');
+        html += summaryBox('Calientes', (res.por_estado ? res.por_estado.caliente : 0) + ' (' + (res.tasa_calientes || 0) + '%)', '#dc2626');
+        html += summaryBox('Cerrados', (res.por_estado ? res.por_estado.cerrado : 0) + ' (' + (res.tasa_cerrados || 0) + '%)', '#059669');
+        html += summaryBox('Citas', res.citas || 0, '#8b5cf6');
+        html += '</div></div>';
+
+        // === STATUS DISTRIBUTION ===
+        html += '<div style="margin-bottom:24px">';
+        html += '<h3 style="font-size:16px;font-weight:600;color:#1f2937;margin-bottom:12px">Pipeline</h3>';
+        var STATUS_KEYS = ['frio', 'tibio', 'caliente', 'cerrado'];
+        var STATUS_EMOJI = { frio: '\u2744\ufe0f', tibio: '\uD83D\uDD25', caliente: '\uD83D\uDCA5', cerrado: '\u2705' };
+        var STATUS_COLOR = { frio: '#6b7280', tibio: '#f59e0b', caliente: '#ef4444', cerrado: '#10b981' };
+        var STATUS_LABEL = { frio: 'Frios', tibio: 'Tibios', caliente: 'Calientes', cerrado: 'Cerrados' };
+        var total = res.total || 1;
+        for (var i = 0; i < STATUS_KEYS.length; i++) {
+            var k = STATUS_KEYS[i];
+            var count = (res.por_estado ? res.por_estado[k] : 0) || 0;
+            var pct = Math.round((count / total) * 100);
+            html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+            html += '<span style="width:100px;font-size:13px">' + STATUS_EMOJI[k] + ' ' + STATUS_LABEL[k] + '</span>';
+            html += '<div style="flex:1;height:10px;background:#f3f4f6;border-radius:5px;overflow:hidden">';
+            html += '<div style="height:100%;width:' + pct + '%;background:' + STATUS_COLOR[k] + ';border-radius:5px"></div></div>';
+            html += '<span style="width:60px;text-align:right;font-size:13px;font-weight:600;color:' + STATUS_COLOR[k] + '">' + count + ' (' + pct + '%)</span>';
+            html += '</div>';
+        }
+        html += '</div>';
+
+        // === DAILY CHART (pure CSS) ===
+        if (contentMode !== 'solo_leads' && daily.labels.length > 0) {
+            html += '<div style="margin-bottom:24px">';
+            html += '<h3 style="font-size:16px;font-weight:600;color:#1f2937;margin-bottom:12px">Leads por Dia</h3>';
+            html += '<div style="display:flex;align-items:end;gap:6px;height:120px;padding:8px 0">';
+            var maxVal = 1;
+            for (var i = 0; i < daily.values.length; i++) {
+                if (daily.values[i] > maxVal) maxVal = daily.values[i];
+            }
+            for (var i = 0; i < daily.labels.length; i++) {
+                var h = Math.round((daily.values[i] / maxVal) * 100);
+                html += '<div style="flex:1;display:flex;flex-direction:column;align-items:center">';
+                html += '<div style="font-size:10px;color:#6b7280;margin-bottom:2px">' + daily.values[i] + '</div>';
+                html += '<div style="width:100%;height:' + h + 'px;background:#3b82f6;border-radius:4px 4px 0 0;min-height:4px"></div>';
+                html += '<div style="font-size:9px;color:#9ca3af;margin-top:4px;transform:rotate(-45deg)">' + daily.labels[i] + '</div>';
+                html += '</div>';
+            }
+            html += '</div></div>';
+        }
+
+        // === SCORE DISTRIBUTION ===
+        if (contentMode !== 'solo_leads') {
+            html += '<div style="margin-bottom:24px">';
+            html += '<h3 style="font-size:16px;font-weight:600;color:#1f2937;margin-bottom:12px">Calidad de Leads (Score)</h3>';
+            html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">';
+            var scoreColors = ['#6b7280', '#f59e0b', '#3b82f6', '#059669'];
+            var scoreLabels = ['0-3 Bajo', '4-6 Medio', '7-8 Alto', '9-10 Top'];
+            var scoreKeys = ['0-3', '4-6', '7-8', '9-10'];
+            for (var i = 0; i < scoreKeys.length; i++) {
+                var count = scoreDist[scoreKeys[i]] || 0;
+                var pct = Math.round((count / Math.max(total, 1)) * 100);
+                html += '<div style="text-align:center;padding:12px;background:#f9fafb;border-radius:12px">';
+                html += '<div style="font-size:24px;font-weight:700;color:' + scoreColors[i] + '">' + count + '</div>';
+                html += '<div style="font-size:11px;color:#6b7280;margin-top:4px">' + scoreLabels[i] + '</div>';
+                html += '<div style="font-size:10px;color:#9ca3af">' + pct + '%</div></div>';
+            }
+            html += '</div></div>';
+        }
+
+        // === LEADS TABLE ===
+        if (leads.length > 0 && contentMode !== 'solo_graficos') {
+            html += renderReportLeadsTable(leads, clinica);
+        }
+
+        // === APPOINTMENTS ===
+        if (appointments.length > 0 && contentMode !== 'solo_graficos' && contentMode !== 'solo_leads') {
+            html += '<div style="margin-bottom:24px">';
+            html += '<h3 style="font-size:16px;font-weight:600;color:#1f2937;margin-bottom:12px">Citas Agendadas</h3>';
+            html += '<table style="width:100%;border-collapse:collapse;font-size:13px">';
+            html += '<thead><tr style="background:#f9fafb">';
+            html += '<th style="text-align:left;padding:8px 12px;border-bottom:2px solid #e5e7eb;color:#6b7280">Lead</th>';
+            html += '<th style="text-align:left;padding:8px 12px;border-bottom:2px solid #e5e7eb;color:#6b7280">Fecha</th>';
+            html += '<th style="text-align:left;padding:8px 12px;border-bottom:2px solid #e5e7eb;color:#6b7280">Duracion</th>';
+            html += '<th style="text-align:left;padding:8px 12px;border-bottom:2px solid #e5e7eb;color:#6b7280">Estado</th></tr></thead><tbody>';
+            for (var i = 0; i < appointments.length; i++) {
+                var a = appointments[i];
+                html += '<tr><td style="padding:8px 12px;border-bottom:1px solid #f3f4f6">' + escHtml(a.lead) + '</td>';
+                html += '<td style="padding:8px 12px;border-bottom:1px solid #f3f4f6">' + a.fecha + '</td>';
+                html += '<td style="padding:8px 12px;border-bottom:1px solid #f3f4f6">' + a.duracion + ' min</td>';
+                html += '<td style="padding:8px 12px;border-bottom:1px solid #f3f4f6">' + a.estado + '</td></tr>';
+            }
+            html += '</tbody></table></div>';
+        }
+
+        // === FOOTER ===
+        html += renderReportFooter(clinica, data.generated_at);
+
+        // Wrap in preview
+        document.getElementById('report-preview').innerHTML =
+            '<div class="text-xs text-gray-400 mb-4" style="text-align:center">Vista previa</div>' + html;
+
+        // Save for export
+        window._reportHTML = html;
+        window._reportData = data;
+    }
+
+    function summaryBox(label, value, color) {
+        var gradient = color + '18';
+        var isMany = parseInt(value) > 0 || String(value).indexOf('0') === -1;
+        var icon = label === 'Total Leads' ? '👥' :
+                   label === 'Calientes' ? '🔥' :
+                   label === 'Cerrados' ? '✅' : '📅';
+        return '<div style="text-align:center;padding:20px 12px;background:' + gradient + ';border-radius:16px;' +
+                'box-shadow:0 2px 8px ' + color + '10">' +
+            '<div style="font-size:14px;margin-bottom:6px">' + icon + '</div>' +
+            '<div style="font-size:28px;font-weight:800;color:' + color + ';line-height:1.1">' + value + '</div>' +
+            '<div style="font-size:12px;color:#6b7280;margin-top:6px;font-weight:500">' + label + '</div></div>';
+    }
+
+    function renderReportLeadsTable(leads, clinica) {
+        var html = '<div style="margin-bottom:24px">';
+        html += '<h3 style="font-size:16px;font-weight:600;color:#1f2937;margin-bottom:12px">Leads</h3>';
+        html += '<table style="width:100%;border-collapse:collapse;font-size:13px">';
+        html += '<thead><tr style="background:#f9fafb">';
+        html += '<th style="text-align:left;padding:8px 12px;border-bottom:2px solid #e5e7eb;color:#6b7280">Nombre</th>';
+        html += '<th style="text-align:left;padding:8px 12px;border-bottom:2px solid #e5e7eb;color:#6b7280">Negocio</th>';
+        html += '<th style="text-align:left;padding:8px 12px;border-bottom:2px solid #e5e7eb;color:#6b7280">Estado</th>';
+        html += '<th style="text-align:left;padding:8px 12px;border-bottom:2px solid #e5e7eb;color:#6b7280">Score</th>';
+        html += '<th style="text-align:right;padding:8px 12px;border-bottom:2px solid #e5e7eb;color:#6b7280">Creado</th></tr></thead><tbody>';
+        for (var i = 0; i < leads.length; i++) {
+            var l = leads[i];
+            var statusColor = '#6b7280';
+            if (l.estado === 'caliente') statusColor = '#dc2626';
+            else if (l.estado === 'tibio') statusColor = '#d97706';
+            else if (l.estado === 'cerrado') statusColor = '#059669';
+            html += '<tr><td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;font-weight:500">' + escHtml(l.nombre) + '</td>';
+            html += '<td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;color:#6b7280">' + escHtml(l.negocio || '-') + '</td>';
+            html += '<td style="padding:8px 12px;border-bottom:1px solid #f3f4f6"><span style="color:' + statusColor + ';font-weight:600">' + l.estado + '</span></td>';
+            html += '<td style="padding:8px 12px;border-bottom:1px solid #f3f4f6">' + l.score + '/10</td>';
+            html += '<td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;text-align:right;color:#9ca3af">' + l.creado + '</td></tr>';
+        }
+        html += '</tbody></table></div>';
+        return html;
+    }
+
+    function renderReportFooter(clinica, generatedAt) {
+        var primario = clinica.color_primario || '#2563eb';
+        return '<div style="border-top:2px solid ' + primario + '30;padding-top:20px;margin-top:32px;text-align:center;font-size:11px;color:#9ca3af">' +
+            '<div style="font-weight:600;color:' + primario + ';font-size:13px;margin-bottom:8px">' + escHtml(clinica.nombre || 'Verano Media RD') + '</div>' +
+            '<div>' + escHtml((clinica.direccion || 'Santo Domingo, República Dominicana')) + '</div>' +
+            '<div style="margin-top:4px">' +
+            (clinica.telefono ? '📞 ' + escHtml(clinica.telefono) : '') +
+            (clinica.email ? ' · ✉️ ' + escHtml(clinica.email) : '') +
+            (clinica.sitio_web ? ' · 🌐 ' + escHtml(clinica.sitio_web) : '') +
+            '</div>' +
+            '<div style="margin-top:12px;padding-top:12px;border-top:1px solid #f3f4f6;color:#d1d5db">' +
+            'Generado por VM CRM · ' + fmtDateTime(generatedAt) + '</div></div>';
+    }
+
+    function getPeriodLabel(days) {
+        for (var i = 0; i < REPORT_PERIODS.length; i++) {
+            if (REPORT_PERIODS[i].value === days) return REPORT_PERIODS[i].label;
+        }
+        return days + ' dias';
+    }
+
+    function exportReport(format) {
+        var data = window._reportData;
+        if (!data) { alert('Primero genera el reporte'); return; }
+        var days = parseInt(document.getElementById('r-period').value);
+
+        if (format === 'pdf') {
+            // Load logo as base64 for print window
+            var printHtml = window._reportHTML || '';
+            // Replace relative logo src with absolute URL for print
+            var absLogo = window.location.origin + '/static/logo_vm.png';
+            printHtml = printHtml.replace(/src="\/static\/logo_vm\.png"/g, 'src="' + absLogo + '"');
+
+            var printWin = window.open('', '_blank');
+            printWin.document.write('<html><head><title>Reporte VM CRM</title>');
+            printWin.document.write('<style>' +
+                'body{font-family:Inter,-apple-system,sans-serif;padding:48px;color:#1f2937;max-width:800px;margin:0 auto}' +
+                'table{width:100%;border-collapse:collapse}' +
+                'th{background:#f9fafb;text-align:left;padding:10px 14px;border-bottom:2px solid #e5e7eb;color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:0.5px}' +
+                'td{padding:10px 14px;border-bottom:1px solid #f3f4f6;font-size:13px}' +
+                'tr:hover{background:#fafafa}' +
+                '@media print{' +
+                'body{padding:20px}' +
+                '@page{margin:1.5cm}' +
+                '}' +
+                '</style></head><body>');
+            printWin.document.write(printHtml);
+            printWin.document.write('</body></html>');
+            printWin.document.close();
+            printWin.focus();
+            setTimeout(function() { printWin.print(); }, 800);
+        } else if (format === 'csv') {
+            window.open('/api/report/csv?days=' + days, '_blank');
+        } else if (format === 'md') {
+            window.open('/api/report/md?days=' + days, '_blank');
+        }
+    }
+
+    // ============================================================
+    // NEW LEAD FORM
+    // ============================================================
+    function showNewLeadForm() {
+        var html = '<div class="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onclick="if(event.target===this)this.remove()">';
+        html += '<div class="bg-white rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl fade-in">';
+        html += '<h3 class="text-lg font-bold text-gray-900 mb-4">+ Nuevo Prospecto</h3>';
+        html += '<div class="space-y-3">';
+        html += '<input id="nl-name" placeholder="Nombre completo *" class="w-full border rounded-xl p-3 text-sm" autofocus>';
+        html += '<input id="nl-business" placeholder="Negocio / Empresa" class="w-full border rounded-xl p-3 text-sm">';
+        html += '<input id="nl-phone" placeholder="Teléfono" class="w-full border rounded-xl p-3 text-sm">';
+        html += '<input id="nl-email" placeholder="Email (opcional)" class="w-full border rounded-xl p-3 text-sm">';
+        html += '<input id="nl-budget" placeholder="Presupuesto estimado (opcional)" class="w-full border rounded-xl p-3 text-sm">';
+        html += '<input id="nl-location" placeholder="Ubicación / Ciudad (ej: Puerto Plata, Santiago...)" class="w-full border rounded-xl p-3 text-sm">';
+        html += '<select id="nl-source" class="w-full border rounded-xl p-3 text-sm">';
+        html += '<option value="whatsapp">WhatsApp</option><option value="web">Sitio web</option><option value="referral">Referido</option><option value="walkin">Llamada directa</option><option value="redes">Redes sociales</option>';
+        html += '</select>';
+        html += '<textarea id="nl-notes" placeholder="Notas / primer contacto (opcional)" class="w-full border rounded-xl p-3 text-sm" rows="2"></textarea>';
+        html += '</div>';
+        html += '<div class="flex gap-2 mt-4">';
+        html += '<button onclick="this.closest(\'.fixed\').remove()" class="flex-1 btn border border-gray-300 rounded-xl p-3 text-sm">Cancelar</button>';
+        html += '<button onclick="createLead()" class="flex-1 btn bg-vm-600 text-white rounded-xl p-3 text-sm font-medium">Guardar Prospecto</button>';
+        html += '</div></div></div>';
+        var div = document.createElement('div');
+        div.innerHTML = html;
+        document.body.appendChild(div.firstElementChild);
+        // Focus name field
+        setTimeout(function() { document.getElementById('nl-name').focus(); }, 100);
+    }
+
+    async function createLead() {
+        var name = document.getElementById('nl-name').value.trim();
+        if (!name) { alert('El nombre es obligatorio'); document.getElementById('nl-name').focus(); return; }
+        var data = await api('/api/leads', {
+            method: 'POST',
+            body: JSON.stringify({
+                name: name,
+                business: document.getElementById('nl-business').value.trim(),
+                phone: document.getElementById('nl-phone').value.trim(),
+                email: document.getElementById('nl-email').value.trim(),
+                budget: document.getElementById('nl-budget').value.trim(),
+                location: document.getElementById('nl-location').value.trim(),
+                source: document.getElementById('nl-source').value,
+                notes: document.getElementById('nl-notes').value.trim(),
+            })
+        });
+        if (data && data.success) {
+            var modal = document.querySelector('.fixed');
+            if (modal) modal.remove();
+            renderPage();
+        }
+    }
+
+    // ============================================================
+    // DELETE LEAD
+    // ============================================================
+    function deleteLeadConfirm(id) {
+        if (!confirm('¿Eliminar este prospecto? Esta acción no se puede deshacer.')) return;
+        api('/api/leads/' + id, { method: 'DELETE' }).then(function(data) {
+            if (data && data.success) {
+                renderPage();
+            }
+        }).catch(function(e) {
+            alert('Error al eliminar: ' + e.message);
+        });
+    }
+
+    // ============================================================
+    // SIDEBAR CLICK HANDLER
+    // ============================================================
+    (function() {
+        var links = document.querySelectorAll('#sidebar-nav a');
+        for (var i = 0; i < links.length; i++) {
+            links[i].addEventListener('click', function(e) {
+                e.preventDefault();
+                navigateTo(this.getAttribute('href'));
+            });
+        }
+        window.addEventListener('popstate', function() { renderPage(); });
+        setActiveLink(window.location.pathname);
+        renderPage();
+    })();
+    </script>
+</body>
+</html>

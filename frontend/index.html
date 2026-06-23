@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VM CRM — Verano Media</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        vm: {
+                            50: '#eff6ff',
+                            100: '#dbeafe',
+                            500: '#3b82f6',
+                            600: '#2563eb',
+                            700: '#1d4ed8',
+                            900: '#1e3a5f',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        * { font-family: 'Inter', sans-serif; }
+        body { background: #f0f4f8; }
+        .card { background: white; border-radius: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); transition: all 0.2s; }
+        .card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
+        .btn { transition: all 0.15s; }
+        .btn:active { transform: scale(0.97); }
+        .fade-in { animation: fadeIn 0.3s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        .sidebar-link { border-radius: 10px; padding: 10px 14px; transition: all 0.15s; font-size: 14px; font-weight: 500; }
+        .sidebar-link:hover { background: #e8f0fe; }
+        .sidebar-link.active { background: #2563eb; color: white; }
+        .status-badge { padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+        .status-frio { background: #f3f4f6; color: #6b7280; }
+        .status-tibio { background: #fef3c7; color: #d97706; }
+        .status-caliente { background: #fee2e2; color: #dc2626; }
+        .status-cerrado { background: #d1fae5; color: #059669; }
+    </style>
+</head>
+<body class="min-h-screen flex">
+    <!-- Sidebar -->
+    <aside class="w-64 bg-white border-r border-gray-200 flex flex-col shrink-0">
+        <div class="p-5 border-b border-gray-100">
+            <div class="flex items-center gap-3">
+                <img src="/static/logo_vm.png" style="height:40px;width:40px;border-radius:10px;object-fit:contain" alt="VM">
+                <div>
+                    <h1 class="font-bold text-gray-900 text-lg leading-tight">Verano Media</h1>
+                    <p class="text-xs text-gray-500">CRM</p>
+                </div>
+            </div>
+        </div>
+        <nav class="flex-1 p-3 space-y-1">
+            <a href="/" class="sidebar-link flex items-center gap-3"><span>📊</span> Dashboard</a>
+            <a href="/pipeline" class="sidebar-link flex items-center gap-3"><span>📋</span> Pipeline</a>
+            <a href="/leads" class="sidebar-link flex items-center gap-3"><span>👥</span> Leads</a>
+            <a href="/calendar" class="sidebar-link flex items-center gap-3"><span>📅</span> Calendario</a>
+            <a href="/reports" class="sidebar-link flex items-center gap-3"><span>📈</span> Reportes</a>
+        </nav>
+        <div class="p-4 border-t border-gray-100">
+            <a href="/logout" class="sidebar-link flex items-center gap-3 text-gray-500">
+                <span>🚪</span> Cerrar sesión
+            </a>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="flex-1 p-6 overflow-y-auto" id="main-content">
+        <!-- Content loaded dynamically -->
+    </main>
+
+    <script>
+        // Sidebar active state
+        const path = window.location.pathname;
+        document.querySelectorAll('.sidebar-link').forEach(a => {
+            const href = a.getAttribute('href');
+            if (path === '/' && href === '/') a.classList.add('active');
+            else if (path.startsWith(href) && href !== '/') a.classList.add('active');
+        });
+
+        // ============================================================
+        // BASE API HELPERS
+        // ============================================================
+
+        async function api(url, options = {}) {
+            const res = await fetch(url, {
+                headers: { 'Content-Type': 'application/json', ...options.headers },
+                ...options,
+            });
+            if (!res.ok && res.status === 401) { window.location = '/login'; return null; }
+            if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || res.statusText); }
+            return res.json();
+        }
+
+        function formatDate(iso) {
+            if (!iso) return '—';
+            const d = new Date(iso);
+            return d.toLocaleDateString('es-DO', { day: 'numeric', month: 'short', year: 'numeric' });
+        }
+
+        function formatTime(iso) {
+            if (!iso) return '—';
+            return new Date(iso).toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function formatDateTime(iso) {
+            if (!iso) return '—';
+            return `${formatDate(iso)} ${formatTime(iso)}`;
+        }
+
+        const STATUS_CONFIG = {
+            frio: { label: 'Frío', emoji: '❄️', color: '#6b7280', bg: '#f3f4f6' },
+            tibio: { label: 'Tibio', emoji: '🔥', color: '#d97706', bg: '#fef3c7' },
+            caliente: { label: 'Caliente', emoji: '💥', color: '#dc2626', bg: '#fee2e2' },
+            cerrado: { label: 'Cerrado', emoji: '✅', color: '#059669', bg: '#d1fae5' },
+        };
+
+        function statusBadge(status) {
+            const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.frio;
+            return `<span class="status-badge" style="background:${cfg.bg};color:${cfg.color}">${cfg.emoji} ${cfg.label}</span>`;
+        }
+
+        // ============================================================
+        // LOAD CONTENT
+        // ============================================================
+
+        async function loadContent() {
+            const main = document.getElementById('main-content');
+            const path = window.location.pathname;
+
+            try {
+                if (path === '/') {
+                    const [stats] = await Promise.all([
+                        api('/api/stats'),
+                    ]);
+                    main.innerHTML = renderDashboard(stats);
+                } else if (path === '/pipeline') {
+                    const data = await api('/api/leads');
+                    main.innerHTML = renderPipeline(data.leads);
+                } else if (path === '/leads') {
+                    const data = await api('/api/leads');
+                    main.innerHTML = renderLeads(data.leads);
+                } else if (path.startsWith('/lead/')) {
+                    const id = path.split('/')[2];
+                    const data = await api(`/api/leads/${id}`);
+                    main.innerHTML = renderLeadDetail(data);
+                } else if (path === '/calendar') {
+                    const data = await api('/api/appointments');
+                    main.innerHTML = renderCalendar(data.appointments);
+                } else if (path === '/reports') {
+                    const [stats, leads] = await Promise.all([
+                        api('/api/stats'),
+                        api('/api/leads'),
+                    ]);
+                    main.innerHTML = renderReports(stats, leads.leads);
+                }
+            } catch(e) {
+                main.innerHTML = `<div class="text-red-500 p-8 text-center">Error: ${e.message}</div>`;
+            }
+        }
+
+        // ============================================================
+        // DASHBOARD
+        // ============================================================
+
+        function renderDashboard(stats) {
+            const s = stats;
+            return `
+                <div class="fade-in">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold text-gray-900">Dashboard</h2>
+                        <span class="text-sm text-gray-500">${new Date().toLocaleDateString('es-DO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</span>
+                    </div>
+
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                        ${statCard('Total Leads', s.total_leads, '👥', 'bg-blue-50 text-blue-600')}
+                        ${statCard('Hoy', s.today_leads, '📥', 'bg-green-50 text-green-600')}
+                        ${statCard('Citas Hoy', s.today_appointments, '📅', 'bg-purple-50 text-purple-600')}
+                        ${statCard('Próximas', s.upcoming_appointments, '🔔', 'bg-orange-50 text-orange-600')}
+                    </div>
+
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                        <div class="card p-4 text-center">
+                            <div class="text-3xl mb-1">❄️</div>
+                            <div class="text-2xl font-bold text-gray-700">${s.by_status?.frio || 0}</div>
+                            <div class="text-xs text-gray-500">Fríos</div>
+                        </div>
+                        <div class="card p-4 text-center">
+                            <div class="text-3xl mb-1">🔥</div>
+                            <div class="text-2xl font-bold text-yellow-600">${s.by_status?.tibio || 0}</div>
+                            <div class="text-xs text-gray-500">Tibios</div>
+                        </div>
+                        <div class="card p-4 text-center">
+                            <div class="text-3xl mb-1">💥</div>
+                            <div class="text-2xl font-bold text-red-600">${s.by_status?.caliente || 0}</div>
+                            <div class="text-xs text-gray-500">Calientes</div>
+                        </div>
+                        <div class="card p-4 text-center">
+                            <div class="text-3xl mb-1">✅</div>
+                            <div class="text-2xl font-bold text-green-600">${s.by_status?.cerrado || 0}</div>
+                            <div class="text-xs text-gray-500">Cerrados</div>
+                        </div>
+                    </div>
+
+                    <div class="card p-6">
+                        <h3 class="font-semibold text-gray-700 mb-4">📥 Últimos leads</h3>
+                        <div id="recent-leads" class="space-y-3"></div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function statCard(label, value, emoji, colorClass) {
+            return `<div class="card p-4 flex items-center gap-4">
+                <div class="w-12 h-12 rounded-xl ${colorClass} flex items-center justify-center text-xl">${emoji}</div>
+                <div>
+                    <div class="text-2xl font-bold text-gray-900">${value || 0}</div>
+                    <div class="text-xs text-gray-500">${label}</div>
+                </div>
+            </div>`;
+        }
+
+        // ============================================================
+        // PIPELINE (Kanban)
+        // ============================================================
+
+        function renderPipeline(leads) {
+            const cols = {
+                frio: leads.filter(l => l.status === 'frio'),
+                tibio: leads.filter(l => l.status === 'tibio'),
+                caliente: leads.filter(l => l.status === 'caliente'),
+                cerrado: leads.filter(l => l.status === 'cerrado'),
+            };
+
+            return `
+                <div class="fade-in">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold text-gray-900">Pipeline</h2>
+                        <button onclick="showNewLeadModal()" class="btn bg-vm-600 text-white px-4 py-2 rounded-xl font-medium hover:bg-vm-700">+ Nuevo Lead</button>
+                    </div>
+                    <div class="grid grid-cols-4 gap-4" style="min-height: 70vh;">
+                        ${kanbanCol('❄️ Frío', 'frio', '#6b7280', cols.frio)}
+                        ${kanbanCol('🔥 Tibio', 'tibio', '#d97706', cols.tibio)}
+                        ${kanbanCol('💥 Caliente', 'caliente', '#dc2626', cols.caliente)}
+                        ${kanbanCol('✅ Cerrado', 'cerrado', '#059669', cols.cerrado)}
+                    </div>
+                </div>
+            `;
+        }
+
+        function kanbanCol(title, status, color, leads) {
+            return `<div>
+                <div class="flex items-center justify-between mb-3 px-1">
+                    <h3 class="font-semibold" style="color:${color}">${title}</h3>
+                    <span class="text-sm text-gray-400 font-medium">${leads.length}</span>
+                </div>
+                <div class="space-y-2" style="min-height: 200px;">
+                    ${leads.map(l => `
+                        <div class="card p-3 cursor-pointer" onclick="window.location='/lead/${l.id}'">
+                            <div class="font-medium text-gray-900 text-sm">${l.name}</div>
+                            ${l.business ? `<div class="text-xs text-gray-500 mt-0.5">${l.business}</div>` : ''}
+                            <div class="flex justify-between items-center mt-2">
+                                <span class="text-xs text-gray-400">${formatDate(l.created_at)}</span>
+                                ${l.score ? `<span class="text-xs font-semibold" style="color:${color}">${l.score}/10</span>` : ''}
+                            </div>
+                        </div>
+                    `).join('')}
+                    ${leads.length === 0 ? '<div class="text-center text-gray-300 text-sm py-8 border-2 border-dashed border-gray-200 rounded-xl">Arrastra leads aquí</div>' : ''}
+                </div>
+            </div>`;
+        }
+
+        // ============================================================
+        // LEADS LIST
+        // ============================================================
+
+        function renderLeads(leads) {
+            return `
+                <div class="fade-in">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold text-gray-900">Leads</h2>
+                        <button onclick="showNewLeadModal()" class="btn bg-vm-600 text-white px-4 py-2 rounded-xl font-medium hover:bg-vm-700">+ Nuevo Lead</button>
+                    </div>
+                    <div class="card overflow-hidden">
+                        <table class="w-full text-sm">
+                            <thead>
+                                <tr class="bg-gray-50 text-left text-gray-500 text-xs uppercase tracking-wider">
+                                    <th class="p-4">Nombre</th>
+                                    <th class="p-4">Negocio</th>
+                                    <th class="p-4">Contacto</th>
+                                    <th class="p-4">Estado</th>
+                                    <th class="p-4">Score</th>
+                                    <th class="p-4">Creado</th>
+                                    <th class="p-4"></th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-100">
+                                ${leads.map(l => `
+                                    <tr class="hover:bg-gray-50 cursor-pointer" onclick="window.location='/lead/${l.id}'">
+                                        <td class="p-4 font-medium text-gray-900">${l.name}</td>
+                                        <td class="p-4 text-gray-600">${l.business || '—'}</td>
+                                        <td class="p-4 text-gray-600">${l.phone || ''} ${l.email ? '<br>'+l.email : ''}</td>
+                                        <td class="p-4">${statusBadge(l.status)}</td>
+                                        <td class="p-4"><span class="font-semibold">${l.score || 0}</span><span class="text-gray-400">/10</span></td>
+                                        <td class="p-4 text-gray-500 text-xs">${formatDate(l.created_at)}</td>
+                                        <td class="p-4 text-right"><span class="text-gray-300">→</span></td>
+                                    </tr>
+                                `).join('')}
+                                ${leads.length === 0 ? '<tr><td colspan="7" class="p-8 text-center text-gray-400">No hay leads aún</td></tr>' : ''}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        // ============================================================
+        // LEAD DETAIL
+        // ============================================================
+
+        function renderLeadDetail(lead) {
+            const statusOptions = ['frio', 'tibio', 'caliente', 'cerrado'].map(s =>
+                `<option value="${s}" ${lead.status === s ? 'selected' : ''}>${STATUS_CONFIG[s].emoji} ${STATUS_CONFIG[s].label}</option>`
+            ).join('');
+
+            return `
+                <div class="fade-in max-w-4xl">
+                    <div class="flex items-center gap-3 mb-6">
+                        <a href="/leads" class="text-gray-400 hover:text-gray-600">← Volver</a>
+                        <h2 class="text-2xl font-bold text-gray-900">${lead.name}</h2>
+                        ${statusBadge(lead.status)}
+                    </div>
+
+                    <div class="grid grid-cols-3 gap-4 mb-6">
+                        <div class="card p-4">
+                            <label class="text-xs text-gray-500 uppercase tracking-wider">Negocio</label>
+                            <p class="font-medium mt-1">${lead.business || '—'}</p>
+                        </div>
+                        <div class="card p-4">
+                            <label class="text-xs text-gray-500 uppercase tracking-wider">Teléfono</label>
+                            <p class="font-medium mt-1">${lead.phone || '—'}</p>
+                        </div>
+                        <div class="card p-4">
+                            <label class="text-xs text-gray-500 uppercase tracking-wider">Email</label>
+                            <p class="font-medium mt-1">${lead.email || '—'}</p>
+                        </div>
+                        <div class="card p-4">
+                            <label class="text-xs text-gray-500 uppercase tracking-wider">Score</label>
+                            <p class="font-2xl font-bold mt-1">${lead.score || 0}/10</p>
+                        </div>
+                        <div class="card p-4">
+                            <label class="text-xs text-gray-500 uppercase tracking-wider">Presupuesto</label>
+                            <p class="font-medium mt-1">${lead.budget || '—'}</p>
+                        </div>
+                        <div class="card p-4">
+                            <label class="text-xs text-gray-500 uppercase tracking-wider">Creado</label>
+                            <p class="font-medium mt-1">${formatDate(lead.created_at)}</p>
+                        </div>
+                    </div>
+
+                    <div class="card p-4 mb-6">
+                        <label class="text-xs text-gray-500 uppercase tracking-wider mb-2 block">Cambiar Estado</label>
+                        <select id="lead-status" class="border rounded-lg p-2 w-full" onchange="updateLeadStatus(${lead.id}, this.value)">
+                            ${statusOptions}
+                        </select>
+                    </div>
+
+                    <div class="card p-4 mb-6">
+                        <h3 class="font-semibold text-gray-700 mb-3">📝 Notas</h3>
+                        <textarea id="lead-notes" class="w-full border rounded-lg p-3 text-sm" rows="3" onchange="updateLeadNotes(${lead.id}, this.value)">${lead.notes || ''}</textarea>
+                    </div>
+
+                    <div class="card p-4 mb-6">
+                        <h3 class="font-semibold text-gray-700 mb-3">💬 Historial</h3>
+                        <div class="space-y-2">
+                            ${(lead.interactions || []).map(i => `
+                                <div class="flex gap-2 ${i.direction === 'in' ? '' : 'flex-row-reverse'}">
+                                    <div class="${i.direction === 'in' ? 'bg-gray-100' : 'bg-blue-50'} rounded-lg px-3 py-2 text-sm max-w-[80%]">
+                                        <span class="text-xs text-gray-400">${formatDateTime(i.created_at)}</span>
+                                        <p class="mt-0.5">${i.message}</p>
+                                    </div>
+                                </div>
+                            `).join('') || '<p class="text-gray-400 text-sm">Sin interacciones</p>'}
+                        </div>
+                    </div>
+
+                    <div class="card p-4">
+                        <h3 class="font-semibold text-gray-700 mb-3">📅 Citas</h3>
+                        ${(lead.appointments || []).map(a => `
+                            <div class="flex justify-between items-center border-b py-2 last:border-0">
+                                <span>${formatDateTime(a.datetime)}</span>
+                                <span class="text-sm text-gray-500">${a.status}</span>
+                            </div>
+                        `).join('') || '<p class="text-gray-400 text-sm">Sin citas agendadas</p>'}
+                    </div>
+                </div>
+            `;
+        }
+
+        // ============================================================
+        // CALENDAR
+        // ============================================================
+
+        function renderCalendar(appointments) {
+            return `
+                <div class="fade-in">
+                    <h2 class="text-2xl font-bold text-gray-900 mb-6">📅 Calendario</h2>
+                    <div class="card p-6">
+                        <h3 class="font-semibold text-gray-700 mb-4">Próximas citas</h3>
+                        <div class="space-y-3">
+                            ${appointments.map(a => `
+                                <div class="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50">
+                                    <div class="flex items-center gap-3">
+                                        <div class="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center text-blue-600 font-bold">${new Date(a.datetime).getDate()}</div>
+                                        <div>
+                                            <p class="font-medium text-gray-900">${a.lead_name}</p>
+                                            <p class="text-sm text-gray-500">${formatDateTime(a.datetime)} · ${a.duration_minutes}min</p>
+                                        </div>
+                                    </div>
+                                    <span class="text-sm text-gray-400 capitalize">${a.status}</span>
+                                </div>
+                            `).join('') || '<p class="text-gray-400 text-center py-8">No hay citas agendadas</p>'}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // ============================================================
+        // REPORTS
+        // ============================================================
+
+        function renderReports(stats, leads) {
+            return `
+                <div class="fade-in">
+                    <h2 class="text-2xl font-bold text-gray-900 mb-6">📈 Reportes</h2>
+                    <div class="grid grid-cols-2 gap-4 mb-6">
+                        <div class="card p-4">
+                            <h3 class="font-semibold text-gray-700 mb-3">Leads por estado</h3>
+                            <div class="space-y-3">
+                                ${Object.entries(STATUS_CONFIG).map(([k, v]) => `
+                                    <div class="flex items-center justify-between">
+                                        <span>${v.emoji} ${v.label}</span>
+                                        <div class="flex items-center gap-2">
+                                            <div class="w-32 h-2 bg-gray-100 rounded-full overflow-hidden">
+                                                <div class="h-full rounded-full" style="width:${stats.total_leads ? (stats.by_status[k]/stats.total_leads*100) : 0}%;background:${v.color}"></div>
+                                            </div>
+                                            <span class="text-sm font-medium w-6 text-right">${stats.by_status[k]}</span>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                        <div class="card p-4">
+                            <h3 class="font-semibold text-gray-700 mb-3">Resumen</h3>
+                            <div class="space-y-2 text-sm">
+                                <p>Total leads: <strong>${stats.total_leads}</strong></p>
+                                <p>Esta semana: <strong>${stats.week_leads}</strong></p>
+                                <p>Hoy: <strong>${stats.today_leads}</strong></p>
+                                <p>Tasa calientes: <strong>${stats.total_leads ? Math.round((stats.by_status.caliente/stats.total_leads)*100) : 0}%</strong></p>
+                                <p>Conversión: <strong>${stats.total_leads ? Math.round((stats.by_status.cerrado/stats.total_leads)*100) : 0}%</strong></p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card p-4">
+                        <h3 class="font-semibold text-gray-700 mb-3">📊 Últimos leads creados</h3>
+                        <div class="text-sm text-gray-500">
+                            ${leads.slice(0, 10).map(l => `
+                                <div class="flex justify-between py-1 border-b last:border-0">
+                                    <span>${l.name}</span>
+                                    <span>${formatDate(l.created_at)}</span>
+                                    <span>${statusBadge(l.status)}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // ============================================================
+        // LEAD STATUS UPDATE
+        // ============================================================
+
+        async function updateLeadStatus(id, status) {
+            await api(`/api/leads/${id}`, {
+                method: 'PUT',
+                body: JSON.stringify({ status }),
+            });
+        }
+
+        async function updateLeadNotes(id, notes) {
+            await api(`/api/leads/${id}`, {
+                method: 'PUT',
+                body: JSON.stringify({ notes }),
+            });
+        }
+
+        // ============================================================
+        // INIT
+        // ============================================================
+
+        loadContent();
+    </script>
+</body>
+</html>
