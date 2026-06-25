@@ -22,6 +22,8 @@ services:
         value: espartaco.rd@gmail.com
       - key: CORS_ORIGINS
         value: https://veranomedia.digital
+      - key: OPENROUTER_API_KEY
+        sync: false
 
 databases:
   - name: veranomedia-db
