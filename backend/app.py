@@ -73,13 +73,14 @@ os.environ['DATABASE_URL'] = database_url
 
 init_db(app)
 
-# Migration: add interaction columns if missing
-for col in ['channel_id', 'source_phone', 'ai_response', 'ai_summary']:
-    try:
-        db.session.execute(db.text('ALTER TABLE interactions ADD COLUMN ' + col + ' TEXT DEFAULT \'\''))
-        db.session.commit()
-    except:
-        db.session.rollback()
+# Migration: add interaction columns
+with app.app_context():
+    for col in ['channel_id', 'source_phone', 'ai_response', 'ai_summary']:
+        try:
+            db.session.execute(db.text('ALTER TABLE interactions ADD COLUMN ' + col + ' TEXT DEFAULT \'\''))
+            db.session.commit()
+        except:
+            db.session.rollback()
 
 # CORS
 CORS_ORIGINS = os.environ.get('CORS_ORIGINS', 'https://veranomedia.digital,https://*.vercel.app')
