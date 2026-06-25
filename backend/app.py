@@ -73,6 +73,14 @@ os.environ['DATABASE_URL'] = database_url
 
 init_db(app)
 
+# Migration: add interaction columns if missing
+for col in ['channel_id', 'source_phone', 'ai_response', 'ai_summary']:
+    try:
+        db.session.execute(db.text('ALTER TABLE interactions ADD COLUMN ' + col + ' TEXT DEFAULT \'\''))
+        db.session.commit()
+    except:
+        db.session.rollback()
+
 # CORS
 CORS_ORIGINS = os.environ.get('CORS_ORIGINS', 'https://veranomedia.digital,https://*.vercel.app')
 CORS(app, origins=CORS_ORIGINS.split(','), supports_credentials=True)
@@ -164,6 +172,25 @@ def api_chat():
             return jsonify({'error': 'Mensaje requerido'}), 400
 
         reply = call_ai(data['message'].strip(), data.get('history', []))
+        
+        # Auto-log interaction (async — no bloquear la respuesta)
+        try:
+            from models import Interaction
+            phone = data.get('phone', '') or data.get('channel_id', '')
+            log = Interaction(
+                lead_id=0,  # 0 = lead aún no identificado
+                direction='inbound',
+                message=data['message'].strip(),
+                ai_response=reply,
+                channel='web',
+                channel_id=data.get('channel_id', ''),
+                source_phone=phone,
+            )
+            db.session.add(log)
+            db.session.commit()
+        except:
+            db.session.rollback()
+        
         return jsonify({'response': reply, 'success': True})
     except Exception as e:
         print(f'[Chat API] Error: {e}')

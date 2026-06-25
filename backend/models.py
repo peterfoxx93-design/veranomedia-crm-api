@@ -93,9 +93,13 @@ class Interaction(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     lead_id = db.Column(db.Integer, db.ForeignKey('leads.id'), nullable=False)
-    direction = db.Column(db.String(10), nullable=False)
+    direction = db.Column(db.String(10), nullable=False)  # inbound / outbound
     message = db.Column(db.Text, nullable=False)
-    channel = db.Column(db.String(20), default='whatsapp')
+    channel = db.Column(db.String(20), default='whatsapp')  # whatsapp / web
+    channel_id = db.Column(db.String(100), default='')  # JID (WhatsApp) o UUID (web)
+    source_phone = db.Column(db.String(50), default='')  # teléfono del cliente
+    ai_response = db.Column(db.Text, default='')  # lo que respondió María/Valentina
+    ai_summary = db.Column(db.Text, default='')  # resumen automático de la conversación
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -103,8 +107,11 @@ class Interaction(db.Model):
             'id': self.id,
             'lead_id': self.lead_id,
             'direction': self.direction,
-            'message': self.message[:200],
+            'message': self.message[:300],
+            'ai_response': self.ai_response[:300] if self.ai_response else '',
             'channel': self.channel,
+            'channel_id': self.channel_id or '',
+            'source_phone': self.source_phone or '',
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
