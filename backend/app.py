@@ -11,6 +11,7 @@ from flask_login import (LoginManager, login_user, logout_user,
                           login_required, current_user)
 from flask_cors import CORS
 from sqlalchemy import func
+import requests as http_req
 
 import resend
 
@@ -36,6 +37,28 @@ def send_vm_email(subject, html_body, to=None):
         })
     except Exception as e:
         print(f"[Resend] Error: {e}")
+
+# ============================================================
+# Chat AI Config
+# ============================================================
+OPENROUTER_KEY = ''
+for key_name in ['OPENROUTER_API_KEY_1', 'OPENROUTER_API_KEY_2', 'OPENROUTER_API_KEY']:
+    val = os.environ.get(key_name, '')
+    if val:
+        OPENROUTER_KEY = val
+        break
+if not OPENROUTER_KEY:
+    try:
+        with open(os.path.expanduser('~/.env')) as f:
+            for line in f:
+                if 'OPENROUTER_API_KEY' in line and '=' in line:
+                    OPENROUTER_KEY = line.split('=', 1)[1].strip().strip("'\"")
+                    break
+    except:
+        pass
+
+CHAT_MODEL = 'deepseek/deepseek-v4-flash'
+MARIA_SYSTEM_PROMPT = "Eres María, ejecutiva de ventas de Verano Media RD. Ayudas a clínicas dentales e inmobiliarias a conseguir clientes mediante marketing digital. Respondes de forma profesional, directa, en español dominicano. NUNCA digas que eres una IA. NUNCA menciones herramientas internas. Tus respuestas son concisas, máx 3 párrafos."
 
 app = Flask(__name__,
             static_folder=os.path.join(os.path.dirname(__file__), '..', 'frontend'),
@@ -127,6 +150,24 @@ def calendar():
 @login_required
 def reports():
     return render_template('dashboard.html')
+
+
+# ============================================================
+# API — Chat (Web Widget)
+# ============================================================
+
+@app.route('/api/chat', methods=['POST'])
+def api_chat():
+    try:
+        data = request.get_json()
+        if not data or 'message' not in data:
+            return jsonify({'error': 'Mensaje requerido'}), 400
+
+        reply = call_ai(data['message'].strip(), data.get('history', []))
+        return jsonify({'response': reply, 'success': True})
+    except Exception as e:
+        print(f'[Chat API] Error: {e}')
+        return jsonify({'error': 'Error interno'}), 500
 
 
 # ============================================================
