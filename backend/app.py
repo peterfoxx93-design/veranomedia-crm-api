@@ -233,6 +233,31 @@ def api_lead_by_phone(phone):
     return jsonify({'found': True, 'lead': lead.to_dict()})
 
 
+# Log interaction (no auth — called from internal services)
+@app.route('/api/interactions/log', methods=['POST'])
+def api_log_interaction():
+    try:
+        data = request.get_json()
+        if not data or 'message' not in data:
+            return jsonify({'error': 'message required'}), 400
+        from models import Interaction
+        log = Interaction(
+            lead_id=data.get('lead_id', 0),
+            direction=data.get('direction', 'inbound'),
+            message=data['message'],
+            channel=data.get('channel', 'whatsapp'),
+            channel_id=data.get('channel_id', ''),
+            source_phone=data.get('source_phone', ''),
+        )
+        db.session.add(log)
+        db.session.commit()
+        return jsonify({'success': True, 'id': log.id})
+    except Exception as e:
+        db.session.rollback()
+        print(f'[Log Interaction] Error: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 # ============================================================
 # API — Leads
 # ============================================================
