@@ -96,7 +96,7 @@ login_manager.init_app(app)
 login_manager.login_view = 'login'
 
 
-@login_manager.user_loader
+# user_loader is below
 
 def call_ai(user_msg, history=None):
     messages = [{'role': 'system', 'content': MARIA_SYSTEM_PROMPT}]
@@ -122,6 +122,7 @@ def call_ai(user_msg, history=None):
 
 
 
+@login_manager.user_loader
 def load_user(user_id):
     return db.session.get(User, int(user_id))
 
