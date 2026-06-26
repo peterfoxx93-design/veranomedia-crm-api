@@ -210,6 +210,40 @@ def rd_now():
 
 
 @app.route('/api/chat', methods=['POST'])
+def api_chat():
+    try:
+        data = request.get_json()
+        if not data or 'message' not in data:
+            return jsonify({'error': 'Mensaje requerido'}), 400
+        reply = call_ai(data['message'].strip(), data.get('history', []))
+        import re as _re
+        lm = _re.search(r'---LEAD---(.*?)---FIN---', reply, _re.DOTALL)
+        if lm:
+            try:
+                from models import Lead
+                t = lm.group(1)
+                nm = _re.search(r'Nombre:\s*(.+)', t)
+                pm = _re.search(r'Telefono:\s*(.+)', t)
+                if nm and pm:
+                    n, p = nm.group(1).strip(), pm.group(1).strip()
+                    lead = Lead.query.filter_by(phone=p).first()
+                    if not lead:
+                        bm = _re.search(r'Negocio:\s*(.+)', t)
+                        em = _re.search(r'Correo:\s*(.+)', t)
+                        sm = _re.search(r'Servicio:\s*(.+)', t)
+                        lead = Lead(name=n, phone=p, email=em.group(1).strip() if em else '', source='web_chat', status='caliente', business=bm.group(1).strip() if bm else '', notes='Servicio: ' + (sm.group(1).strip() if sm else ''))
+                        db.session.add(lead)
+                        db.session.flush()
+                    else:
+                        lead.status = 'caliente'
+                    db.session.commit()
+            except:
+                pass
+        return jsonify({'response': reply, 'success': True})
+    except Exception as e:
+        print(f'[Chat API] Error: {e}')
+        return jsonify({'error': 'Error interno'}), 500
+
 
 # ============================================================
 # API — Leads
