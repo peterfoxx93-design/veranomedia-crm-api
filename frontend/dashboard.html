@@ -338,7 +338,7 @@
         html += '</tr></thead><tbody class="divide-y divide-gray-100">';
         for (var i = 0; i < leads.length; i++) {
             var l = leads[i];
-            html += '<tr class="hover:bg-gray-50">';
+            html += '<tr class="hover:bg-gray-50 cursor-pointer" onclick="navigateTo(\'/lead/' + l.id + '\')">';
             html += '<td class="p-4 font-medium text-gray-900">' + escHtml(l.name);
             if (l.location) html += '<div class="text-xs text-gray-400 font-normal mt-0.5">📍 ' + escHtml(l.location) + '</div>';
             html += '</td>';
