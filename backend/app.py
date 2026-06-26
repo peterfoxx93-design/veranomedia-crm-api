@@ -60,8 +60,11 @@ if not OPENROUTER_KEY:
         pass
 
 CHAT_MODEL = 'deepseek/deepseek-v4-flash'
-with open(os.path.join(os.path.dirname(__file__), '..', 'maria_prompt_web.txt')) as f:
-    MARIA_SYSTEM_PROMPT = f.read()
+try:
+    with open(os.path.join(os.path.dirname(__file__), '..', 'maria_prompt_web.txt')) as f:
+        MARIA_SYSTEM_PROMPT = f.read()
+except:
+    MARIA_SYSTEM_PROMPT = 'Eres Maria, ejecutiva de ventas de Verano Media RD.'
 
 app = Flask(__name__,
             static_folder=os.path.join(os.path.dirname(__file__), '..', 'frontend'),
