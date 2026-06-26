@@ -71,10 +71,9 @@ if database_url and database_url.startswith('postgres://'):
     database_url = database_url.replace('postgres://', 'postgresql://', 1)
 os.environ['DATABASE_URL'] = database_url
 
-init_db(app)
-
-# Migration: add interaction columns
 with app.app_context():
+    init_db(app)
+    # Migration: add interaction columns
     for col in ['channel_id', 'source_phone', 'ai_response', 'ai_summary']:
         try:
             db.session.execute(db.text('ALTER TABLE interactions ADD COLUMN ' + col + ' TEXT DEFAULT \'\''))
