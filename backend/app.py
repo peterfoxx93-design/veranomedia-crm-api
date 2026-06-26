@@ -13,6 +13,8 @@ from flask_cors import CORS
 from sqlalchemy import func
 import requests as http_req
 
+import os
+import requests as http_req
 import resend
 
 # Add parent to path
@@ -58,7 +60,8 @@ if not OPENROUTER_KEY:
         pass
 
 CHAT_MODEL = 'deepseek/deepseek-v4-flash'
-MARIA_SYSTEM_PROMPT = "Eres María, ejecutiva de ventas de Verano Media RD. Ayudas a clínicas dentales e inmobiliarias a conseguir clientes mediante marketing digital. Respondes de forma profesional, directa, en español dominicano. NUNCA digas que eres una IA. NUNCA menciones herramientas internas. Tus respuestas son concisas, máx 3 párrafos."
+with open(os.path.join(os.path.dirname(__file__), '..', 'maria_prompt_web.txt')) as f:
+    MARIA_SYSTEM_PROMPT = f.read()
 
 app = Flask(__name__,
             static_folder=os.path.join(os.path.dirname(__file__), '..', 'frontend'),
@@ -91,6 +94,31 @@ login_manager.login_view = 'login'
 
 
 @login_manager.user_loader
+
+def call_ai(user_msg, history=None):
+    messages = [{'role': 'system', 'content': MARIA_SYSTEM_PROMPT}]
+    if history:
+        for h in history[-8:]:
+            messages.append({'role': 'user', 'content': h.get('user','')})
+            if h.get('bot'):
+                messages.append({'role': 'assistant', 'content': h['bot']})
+    messages.append({'role': 'user', 'content': user_msg})
+    resp = http_req.post(
+        'https://openrouter.ai/api/v1/chat/completions',
+        headers={
+            'Authorization': 'Bearer ' + os.environ.get('OPENROUTER_API_KEY', ''),
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://veranomedia.digital',
+        },
+        json={'model': CHAT_MODEL, 'messages': messages, 'max_tokens': 800, 'temperature': 0.7},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        raise Exception('AI error: ' + str(resp.status_code))
+    return resp.json()['choices'][0]['message']['content']
+
+
+
 def load_user(user_id):
     return db.session.get(User, int(user_id))
 
@@ -165,6 +193,11 @@ def reports():
 # ============================================================
 
 @app.route('/api/chat', methods=['POST'])
+def rd_now():
+    from datetime import timezone
+    return datetime.now(timezone.utc) - timedelta(hours=4)
+
+
 def api_chat():
     try:
         data = request.get_json()
@@ -185,7 +218,7 @@ def api_chat():
                 existing = Lead.query.filter(Lead.phone == phone).first()
                 if existing:
                     lead_id = existing.id
-                    existing.last_contact = datetime.utcnow()
+                    existing.last_contact = rd_now()
             
             log = Interaction(
                 lead_id=lead_id,
@@ -201,6 +234,33 @@ def api_chat():
         except Exception as e:
             db.session.rollback()
             print(f'[Chat Log] {e}')
+        
+        import re as _re
+        lm = _re.search(r'---LEAD---(.*?)---FIN---', reply, _re.DOTALL)
+        if lm:
+            try:
+                from models import Lead
+                t = lm.group(1)
+                nm = _re.search(r'Nombre:\s*(.+)', t)
+                pm = _re.search(r'Telefono:\s*(.+)', t)
+                if nm and pm:
+                    n, p = nm.group(1).strip(), pm.group(1).strip()
+                    lead = Lead.query.filter_by(phone=p).first()
+                    if not lead:
+                        bm = _re.search(r'Negocio:\s*(.+)', t)
+                        em = _re.search(r'Correo:\s*(.+)', t)
+                        sm = _re.search(r'Servicio:\s*(.+)', t)
+                        b = bm.group(1).strip() if bm else ''
+                        e = em.group(1).strip() if em else ''
+                        s = sm.group(1).strip() if sm else ''
+                        lead = Lead(name=n, phone=p, email=e, source='web_chat', status='caliente', business=b, notes='Servicio: ' + s)
+                        db.session.add(lead)
+                        db.session.flush()
+                    else:
+                        lead.status = 'caliente'
+                    db.session.commit()
+            except:
+                pass
         
         return jsonify({'response': reply, 'success': True})
     except Exception as e:
@@ -282,7 +342,7 @@ def api_get_leads():
                    Lead.email.ilike(like))
         )
     if days:
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = rd_now() - timedelta(days=days)
         query = query.filter(Lead.created_at >= cutoff)
 
     query = query.order_by(Lead.updated_at.desc())
@@ -360,7 +420,7 @@ def api_update_lead(lead_id):
         if field in data:
             setattr(lead, field, data[field])
 
-    lead.updated_at = datetime.utcnow()
+    lead.updated_at = rd_now()
     db.session.commit()
     return jsonify({'lead': lead.to_dict(), 'success': True})
 
@@ -403,7 +463,7 @@ def api_add_interaction(lead_id):
         message=data.get('message', ''),
         channel=data.get('channel', 'whatsapp'),
     )
-    lead.last_contact = datetime.utcnow()
+    lead.last_contact = rd_now()
     db.session.add(interaction)
     db.session.commit()
     return jsonify({'interaction': interaction.to_dict(), 'success': True}), 201
@@ -482,7 +542,7 @@ def api_get_report():
     lead_only_filter = request.args.get('lead_only', '').lower() == 'true'
     include_charts = request.args.get('charts', 'true').lower() != 'false'
 
-    now = datetime.utcnow()
+    now = rd_now()
     cutoff = now - timedelta(days=days) if days > 0 else datetime(2020, 1, 1)
 
     # Load report config
@@ -571,7 +631,7 @@ def api_get_report():
 @login_required
 def api_export_csv():
     days = request.args.get('days', 30, type=int)
-    cutoff = datetime.utcnow() - timedelta(days=days) if days > 0 else datetime(2020, 1, 1)
+    cutoff = rd_now() - timedelta(days=days) if days > 0 else datetime(2020, 1, 1)
     leads = Lead.query.filter(Lead.created_at >= cutoff).order_by(Lead.created_at.desc()).all()
 
     import csv, io
@@ -596,7 +656,7 @@ def api_export_csv():
 @login_required
 def api_export_md():
     days = request.args.get('days', 30, type=int)
-    cutoff = datetime.utcnow() - timedelta(days=days) if days > 0 else datetime(2020, 1, 1)
+    cutoff = rd_now() - timedelta(days=days) if days > 0 else datetime(2020, 1, 1)
     leads = Lead.query.filter(Lead.created_at >= cutoff).order_by(Lead.created_at.desc()).all()
 
     try:
@@ -617,7 +677,7 @@ def api_export_md():
     md.append(f'# {clinica.get("nombre", "Verano Media RD")}')
     md.append(f'*{clinica.get("eslogan", "")}*')
     md.append(f'')
-    md.append(f'**Reporte generado:** {datetime.utcnow().strftime("%d/%m/%Y %H:%M")}')
+    md.append(f'**Reporte generado:** {rd_now().strftime("%d/%m/%Y %H:%M")}')
     md.append(f'**Periodo:** {days} dias')
     md.append(f'')
     md.append(f'## Resumen')
@@ -636,7 +696,7 @@ def api_export_md():
         md.append(f'| {l.name} | {l.business or "-"} | {l.status} | {l.score or 0}/10 |')
     md.append(f'')
     md.append(f'---')
-    md.append(f'*Generado por VM CRM — {datetime.utcnow().strftime("%d/%m/%Y %H:%M")}*')
+    md.append(f'*Generado por VM CRM — {rd_now().strftime("%d/%m/%Y %H:%M")}*')
 
     return '\n'.join(md), 200, {
         'Content-Type': 'text/markdown; charset=utf-8',
@@ -667,7 +727,7 @@ def api_report_config():
 @app.route('/api/stats', methods=['GET'])
 @login_required
 def api_get_stats():
-    now = datetime.utcnow()
+    now = rd_now()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
 
@@ -741,11 +801,11 @@ def maria_create_lead():
 
     # Auto-schedule followup
     if lead.status == 'caliente':
-        lead.next_followup = datetime.utcnow() + timedelta(hours=2)
+        lead.next_followup = rd_now() + timedelta(hours=2)
     elif lead.status == 'tibio':
-        lead.next_followup = datetime.utcnow() + timedelta(days=1)
+        lead.next_followup = rd_now() + timedelta(days=1)
     else:
-        lead.next_followup = datetime.utcnow() + timedelta(days=3)
+        lead.next_followup = rd_now() + timedelta(days=3)
 
     db.session.add(lead)
     db.session.commit()
