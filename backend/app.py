@@ -195,16 +195,7 @@ def reports():
 # API — Chat (Web Widget) + Timeline
 # ============================================================
 
-def rd_now():
-    from datetime import timezone
-    return datetime.now(timezone.utc) - timedelta(hours=4)
 
-
-@app.route('/api/chat', methods=['POST'])
-
-
-@app.route('/reports')
-@login_required
 def reports():
     return render_template('dashboard.html')
 
@@ -219,130 +210,6 @@ def rd_now():
 
 
 @app.route('/api/chat', methods=['POST'])
-def api_chat():
-    from datetime import timezone
-    return datetime.now(timezone.utc) - timedelta(hours=4)
-
-
-def api_chat():
-    try:
-        data = request.get_json()
-        if not data or 'message' not in data:
-            return jsonify({'error': 'Mensaje requerido'}), 400
-
-        reply = call_ai(data['message'].strip(), data.get('history', []))
-        
-        # Auto-log interaction con detección de lead por teléfono
-        try:
-            from models import Interaction
-            phone = data.get('phone', '') or ''
-            channel_id = data.get('channel_id', '')
-            
-            # Buscar lead existente por teléfono
-            lead_id = 0
-            if phone:
-                existing = Lead.query.filter(Lead.phone == phone).first()
-                if existing:
-                    lead_id = existing.id
-                    existing.last_contact = rd_now()
-            
-            log = Interaction(
-                lead_id=lead_id,
-                direction='inbound',
-                message=data['message'].strip(),
-                ai_response=reply,
-                channel='web',
-                channel_id=channel_id,
-                source_phone=phone,
-            )
-            db.session.add(log)
-            db.session.commit()
-        except Exception as e:
-            db.session.rollback()
-            print(f'[Chat Log] {e}')
-        
-        import re as _re
-        lm = _re.search(r'---LEAD---(.*?)---FIN---', reply, _re.DOTALL)
-        if lm:
-            try:
-                from models import Lead
-                t = lm.group(1)
-                nm = _re.search(r'Nombre:\s*(.+)', t)
-                pm = _re.search(r'Telefono:\s*(.+)', t)
-                if nm and pm:
-                    n, p = nm.group(1).strip(), pm.group(1).strip()
-                    lead = Lead.query.filter_by(phone=p).first()
-                    if not lead:
-                        bm = _re.search(r'Negocio:\s*(.+)', t)
-                        em = _re.search(r'Correo:\s*(.+)', t)
-                        sm = _re.search(r'Servicio:\s*(.+)', t)
-                        b = bm.group(1).strip() if bm else ''
-                        e = em.group(1).strip() if em else ''
-                        s = sm.group(1).strip() if sm else ''
-                        lead = Lead(name=n, phone=p, email=e, source='web_chat', status='caliente', business=b, notes='Servicio: ' + s)
-                        db.session.add(lead)
-                        db.session.flush()
-                    else:
-                        lead.status = 'caliente'
-                    db.session.commit()
-            except:
-                pass
-        
-        return jsonify({'response': reply, 'success': True})
-    except Exception as e:
-        print(f'[Chat API] Error: {e}')
-        return jsonify({'error': 'Error interno'}), 500
-
-
-# Timeline de interacciones por lead
-@app.route('/api/leads/<int:lead_id>/interactions', methods=['GET'])
-@login_required
-def api_lead_interactions(lead_id):
-    lead = db.session.get(Lead, lead_id)
-    if not lead:
-        return jsonify({'error': 'Lead not found'}), 404
-    interactions = Interaction.query.filter_by(lead_id=lead_id).order_by(Interaction.created_at.desc()).limit(50).all()
-    return jsonify({
-        'interactions': [i.to_dict() for i in interactions],
-        'lead': lead.to_dict(),
-        'total': len(interactions),
-    })
-
-
-# Buscar lead por teléfono (para unificar)
-@app.route('/api/leads/by-phone/<phone>', methods=['GET'])
-@login_required
-def api_lead_by_phone(phone):
-    lead = Lead.query.filter(Lead.phone == phone).first()
-    if not lead:
-        return jsonify({'found': False}), 404
-    return jsonify({'found': True, 'lead': lead.to_dict()})
-
-
-# Log interaction (no auth — called from internal services)
-@app.route('/api/interactions/log', methods=['POST'])
-def api_log_interaction():
-    try:
-        data = request.get_json()
-        if not data or 'message' not in data:
-            return jsonify({'error': 'message required'}), 400
-        from models import Interaction
-        log = Interaction(
-            lead_id=data.get('lead_id', 0),
-            direction=data.get('direction', 'inbound'),
-            message=data['message'],
-            channel=data.get('channel', 'whatsapp'),
-            channel_id=data.get('channel_id', ''),
-            source_phone=data.get('source_phone', ''),
-        )
-        db.session.add(log)
-        db.session.commit()
-        return jsonify({'success': True, 'id': log.id})
-    except Exception as e:
-        db.session.rollback()
-        print(f'[Log Interaction] Error: {e}')
-        return jsonify({'error': str(e)}), 500
-
 
 # ============================================================
 # API — Leads
