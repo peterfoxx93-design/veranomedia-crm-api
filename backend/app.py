@@ -198,6 +198,24 @@ def rd_now():
 
 
 @app.route('/api/chat', methods=['POST'])
+
+
+@app.route('/reports')
+@login_required
+def reports():
+    return render_template('dashboard.html')
+
+
+# ============================================================
+# API — Chat (Web Widget) + Timeline
+# ============================================================
+
+def rd_now():
+    from datetime import timezone
+    return datetime.now(timezone.utc) - timedelta(hours=4)
+
+
+@app.route('/api/chat', methods=['POST'])
 def api_chat():
     from datetime import timezone
     return datetime.now(timezone.utc) - timedelta(hours=4)
